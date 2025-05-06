@@ -59,6 +59,7 @@ def main(config_path):
     
     batch_size = config.get('batch_size', 10)
     device = accelerator.device
+    print('Using device:', device)
     
     epochs = config.get('epochs_1st', 200)
     save_freq = config.get('save_freq', 2)
@@ -183,7 +184,7 @@ def main(config_path):
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch
             
             with torch.no_grad():
-                mask = length_to_mask(mel_input_length // (2 ** n_down)).to('cuda')
+                mask = length_to_mask(mel_input_length // (2 ** n_down)).to(device)
                 text_mask = length_to_mask(input_lengths).to(texts.device)
 
             ppgs, s2s_pred, s2s_attn = model.text_aligner(mels, mask, texts)

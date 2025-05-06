@@ -1,0 +1,152 @@
+# === GENERAL & LOGGING ===
+log_dir: "outputs/logs/vietnamese_lsvsc" # Recommend relative path for logs
+# Path where the first stage model checkpoint will be saved/loaded from for stage 2
+first_stage_path: "outputs/models/vietnamese_lsvsc_stage1.pth" # Recommend relative path for models
+save_freq: 10 # Save checkpoints every 10 epochs (adjust as needed)
+log_interval: 100 # Log training progress every 100 steps/batches
+device: "cuda"
+
+# === TRAINING LENGTH ===
+# Adjusted epochs for a ~100 hour dataset. Monitor loss and adjust as needed.
+epochs_1st: 60 # Number of epochs for first stage training (pre-training)
+epochs_2nd: 60 # Number of epochs for second stage training (joint training)
+
+# === BATCHING & DATA LOADING ===
+batch_size: 16 # Default is 16. Decrease to 8 or 4 if you get Out Of Memory (OOM) errors.
+max_len: 400 # Max audio frames per batch item (~5 seconds). Decrease if OOM.
+
+# === PRE-TRAINED MODELS & LOADING ===
+pretrained_model: "" # Leave empty if training from scratch
+# Load the first_stage_path checkpoint when starting stage 2
+second_stage_load_pretrained: true
+load_only_params: false # Load optimizer state etc. if resuming training
+
+# === UTILITY MODELS (Paths need checking for Vietnamese suitability) ===
+# NOTE: These pre-trained models (JDC, ASR) were likely trained on English/other languages.
+# They *might* work okay for Vietnamese, but performance could be suboptimal.
+# If alignment or pitch seems poor, you may need to retrain these using Vietnamese data.
+F0_path: "Utils/JDC/bst.t7"
+ASR_config: "Utils/ASR/config.yml"
+ASR_path: "Utils/ASR/epoch_00080.pth"
+
+# !!! CRITICAL: Change this path !!!
+# Point this to your downloaded/trained Vietnamese or Multilingual PL-BERT model directory.
+# The default English model in Utils/PLBERT/ will NOT work well.
+PLBERT_dir: "Utils/PLBERT/"
+
+# === DATA PARAMETERS ===
+data_params:
+  # Paths to your generated file lists
+  train_data: "Data/train_list.txt"
+  val_data: "Data/val_list.txt"
+  # Base path for the training script to find the audio files referenced above
+  root_path: "/Users/ronan/LSVSC-1000_24k"
+  # OOD text file path - leave empty or commented out to skip SLM training
+  OOD_data: "Data/OOD_texts.txt"
+  min_length: 50 # Only relevant if OOD_data is provided
+
+# === PREPROCESSING PARAMETERS ===
+preprocess_params:
+  sr: 24000 # Must match your resampled audio
+  spect_params:
+    n_fft: 2048
+    win_length: 1200
+    hop_length: 300 # Corresponds to ~12.5ms frame shift at 24kHz
+
+# === MODEL PARAMETERS ===
+model_params:
+  multispeaker: false # Set to true only if your dataset has multiple speakers AND you provide speaker IDs
+
+  dim_in: 64
+  hidden_dim: 512
+  max_conv_dim: 512
+  n_layer: 3
+  n_mels: 80
+
+  # !!! CRITICAL: Calculate and set this value !!!
+  # Number of unique phonemes/symbols in your Vietnamese vocabulary + special symbols.
+  # See instructions below on how to calculate this.
+  n_token: 2064 # e.g., 120 (placeholder, MUST be calculated)
+
+  max_dur: 50 # Maximum predicted duration frames for a single phoneme
+  style_dim: 128 # Size of the style vector embedding
+
+  dropout: 0.2
+
+  # --- Decoder Config ---
+  decoder:
+    type: "istftnet" # istftnet is generally faster/lighter than hifigan
+    resblock_kernel_sizes: [3, 7, 11]
+    upsample_rates: [10, 6] # Corresponds to hop_length 300 (10*6*5)
+    upsample_initial_channel: 512
+    resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+    upsample_kernel_sizes: [20, 12]
+    # iSTFTNet specific params
+    gen_istft_n_fft: 20
+    gen_istft_hop_size: 5
+
+  # --- SLM Config (Used only if OOD_data provided and lambda_slm > 0) ---
+  slm:
+    # Needs to be a model compatible with Vietnamese if used
+    model: "microsoft/wavlm-base-plus" # Or other suitable SLM
+    sr: 16000
+    hidden: 768
+    nlayers: 13
+    initial_channel: 64
+
+  # --- Style Diffusion Config (Used in Stage 2) ---
+  diffusion:
+    embedding_mask_proba: 0.1
+    transformer:
+      num_layers: 3
+      num_heads: 8
+      head_features: 64
+      multiplier: 2
+    dist:
+      sigma_data: 0.2
+      estimate_sigma_data: true
+      mean: -3.0
+      std: 1.0
+
+# === LOSS WEIGHTS ===
+loss_params:
+  lambda_mel: 5.
+  lambda_gen: 1.
+
+  # Set to 0.0 to disable SLM adversarial loss since OOD_data is not provided
+  lambda_slm: 0.0 # <-- Disabled SLM loss
+
+  # Stage 1 Losses (TMA Alignment)
+  lambda_mono: 1.
+  lambda_s2s: 1.
+  TMA_epoch: 50 # Start TMA alignment loss calculation after this many epochs in Stage 1
+
+  # Stage 2 Losses
+  lambda_F0: 1.
+  lambda_norm: 1.
+  lambda_dur: 1.
+  lambda_ce: 20.
+  lambda_sty: 1.
+  lambda_diff: 1. # Style Diffusion loss weight
+
+  diff_epoch: 20 # Start Style Diffusion loss calculation after this many epochs in Stage 2
+  # Start calculating Stage 2 specific losses (F0, norm, dur, ce, sty, diff) after this many epochs in Stage 2
+  joint_epoch: 50 # Note: This name might be misleading, it controls start of stage 2 losses.
+
+# === OPTIMIZER PARAMETERS ===
+optimizer_params:
+  lr: 0.0001
+  # Learning rate for the PL-BERT model - maybe requires tuning
+  bert_lr: 0.00001
+  # Fine-tuning learning rate for acoustic modules (used if loading pretrained TTS model?)
+  ft_lr: 0.00001
+
+# === SLM ADVERSARIAL TRAINING PARAMETERS (Ignored if lambda_slm=0) ===
+slmadv_params:
+  min_len: 400
+  max_len: 500
+  batch_percentage: 0.5
+  iter: 10
+  thresh: 5
+  scale: 0.01
+  sig: 1.5
